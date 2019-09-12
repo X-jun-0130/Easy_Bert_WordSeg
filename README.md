@@ -16,10 +16,15 @@
 
 ## 数据处理
  第一步： 将句子转化为 'B M E S' 序列
+ 
  B：表示词的开始
+ 
  M：表示词的中间
+ 
  E：表示词的结束
+ 
  S：表示单字成词
+ 
  例如：中文模型 --->  BMME
  ```
  #将句子转换为BMES序列
@@ -69,9 +74,20 @@ padding部分，不足设定程度的句子，补0
         assert len(segment) == pm.seq_length
         assert len(_label) == pm.seq_length
 ```
- 最后，得到的input_id, input_segment, mask, label为模型的输入。具体程序在data_process.py里。
+```
+此外，crf在计算最大似然数时sequence_lengths=real_sequlength，这里输入的是句子的真实长度(也就是减去padding部分的长度)。
+def sequence(x_batch):
+    seq_len = []
+    for line in x_batch:
+        length = np.sum(np.sign(line))
+        seq_len.append(length)
+    return seq_len
+ 利用这个程序来计算。
+```
+ 最后，得到的input_id, input_segment, mask, seq_len, label为模型的输入。具体程序在data_process.py里。
  
- 第三步：构建模型
+## 构建模型
+ 
  bert模型：
  ```
 with tf.variable_scope('bert'):
@@ -140,4 +156,47 @@ for var in tvars:
                     init_string)
 session = tf.Session()
 session.run(tf.global_variables_initializer())
+```
+## 训练模型
+```
+for epoch in range(pm.num_epochs):
+        print('Epoch:', epoch + 1)
+        num_batchs = int((len(label) - 1) / pm.batch_size) + 1
+        batch_train = batch_iter(input_id, input_segment_, mask_, label, pm.batch_size)
+        for x_id, x_segment, x_mask, y_label in batch_train:
+            n += 1
+            sequ_length = sequence(x_id)
+            feed_dict = feed_data(x_id, x_mask, x_segment, y_label, sequ_length, pm.keep_prob)
+            _,  train_summary, train_loss = session.run([train_op, merged_summary, loss], feed_dict=feed_dict)
+
+            if n % 100 == 0:
+                print('步骤:', n, '损失值:', train_loss)
+        # P = evaluate(session, test_id, test_segment, test_mask, test_label)
+        # print('测试集准确率:', P)
+        # if P > best:
+        #     best = P
+        if (epoch+1) % 5 == 0:
+            print("Saving model...")
+            saver.save(session, save_path, global_step=((epoch + 1) * num_batchs))
+```
+batch_size为12，每当步骤为100的倍数，输出此时的loss,当epoch数为5的倍数时，保存一次模型。
+
+在备注里面说了， 测试精度过程写的不好，但我没删，有需要的可以加以改进。这部分是训练模型中的 evaluate函数。
+
+## 验证模型
+```
+验证模型的分词效果，主要是使用viterbi进行解码。至于这里的feed_dict里面的参数，为什么要加一个'[]'，如：[text2id]。
+因为text2id是一个句子，列表为1维tensor,我需要将其变成2维tensor。
+    logits_, transition_params_ = sess.run([logits, transition_params], feed_dict={input_x: [text2id],
+                                                                                   input_segment: [segment],
+                                                                                   mask: [mask_],
+                                                                                   real_sequlength: [seqlength],
+                                                                                   keep_pro: 1.0})
+
+    # logit 每个子句的输出值，length子句的真实长度，logit[:length]的真实输出值
+    # 调用维特比算法求最优标注序列
+    label = []
+    for logit, length in zip(logits_, [seqlength]):
+        viterbi_seq, _ = viterbi_decode(logit[:length], transition_params_)
+        label = [key for key in viterbi_seq]
 ```
