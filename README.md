@@ -40,4 +40,34 @@ def get_str(sentence):
             output_str.append('E')
     return output_str
  ```
+ 第二步：处理成bert模型所需数据
+```
+tokenizer = tokenization.FullTokenizer(vocab_file=pm.vocab_filename, do_lower_case=False) 加载预训练bert模型的中文词典
+text = tokenizer.tokenize(eachline)  将句子转换成 字列表，如：输入“你好”，返回['你','好']
+bert需要在字列表首位添加 "[CLS]"，尾部添加"[SEP]"字符
+text.insert(0, "[CLS]")
+text.append("[SEP]")
+返回数据为：['CLS','你','好','SEP']
+然后将列表字转换成数字，还是利用bert中文字典，
+text2id = tokenizer.convert_tokens_to_ids(text) 将字列表 变成 数字列表
+
+segemnt表示输入的句子是段落几，第一段落用0表示，第二段落用1表示，...。bert能够接受的中文句子长度为512，大于这个长度可以分段输入。
+
+mask矩阵，句子原长度部分，权重值为1，padding得来的部分，权重值为0
+
+接下来，将label转换成数字，state_list = {'B': 1, 'M': 2, 'E': 3, 'S': 4, '[CLS]': 5, '[SEP]': 6}
+_label = [state_list[key] for key in label_]
+        if len(text2id) != len(_label):
+            print(i)
+padding部分，不足设定程度的句子，补0
+        while len(text2id) < pm.seq_length:
+            text2id.append(0)
+            mask_.append(0)
+            segment.append(0)
+            _label.append(0)
+        assert len(text2id) == pm.seq_length
+        assert len(mask_) == pm.seq_length
+        assert len(segment) == pm.seq_length
+        assert len(_label) == pm.seq_length
+```
  
