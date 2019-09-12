@@ -65,7 +65,7 @@ mask矩阵，句子原长度部分，权重值为1，padding得来的部分，�
 接下来，将label转换成数字，state_list = {'B': 1, 'M': 2, 'E': 3, 'S': 4, '[CLS]': 5, '[SEP]': 6}
 _label = [state_list[key] for key in label_]
 
-padding部分，不足设定程度的句子，补0
+padding部分，不足设定长度的句子，补0
         while len(text2id) < pm.seq_length:
             text2id.append(0)
             mask_.append(0)
