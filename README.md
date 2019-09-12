@@ -57,8 +57,7 @@ mask矩阵，句子原长度部分，权重值为1，padding得来的部分，�
 
 接下来，将label转换成数字，state_list = {'B': 1, 'M': 2, 'E': 3, 'S': 4, '[CLS]': 5, '[SEP]': 6}
 _label = [state_list[key] for key in label_]
-        if len(text2id) != len(_label):
-            print(i)
+
 padding部分，不足设定程度的句子，补0
         while len(text2id) < pm.seq_length:
             text2id.append(0)
@@ -70,4 +69,75 @@ padding部分，不足设定程度的句子，补0
         assert len(segment) == pm.seq_length
         assert len(_label) == pm.seq_length
 ```
+ 最后，得到的input_id, input_segment, mask, label为模型的输入。具体程序在data_process.py里。
  
+ 第三步：构建模型
+ bert模型：
+ ```
+with tf.variable_scope('bert'):
+    bert_embedding = modeling.BertModel(config=bert_config,
+                                        is_training=True,
+                                        input_ids=input_x,
+                                        input_mask=mask,
+                                        token_type_ids=input_segment,
+                                        use_one_hot_embeddings=False)
+
+    embedding_inputs = bert_embedding.get_sequence_output()
+is_training=True表示进行finetune,  use_one_hot_embeddings=False表示不使用TPU。
+bert_embedding.get_sequence_output()输出数据形式[batch_size,seq_length,hidden_dim],hidden_dim=768
+```
+crf模型：
+```
+#bert预训练模型输出形状[batch_size, max_seq_length, hidden_dim]
+#进行处理，形状改为[batch_size*max_seq_length, hidden_dim]
+#进行全连接，输出结果形状为[batch_size*max_seq_length, pm.num_tags]
+#重新转为三维形状，进行crf层
+with tf.variable_scope('crf'):
+    outputs = embedding_inputs
+    hidden_size = outputs.shape[-1].value
+    output = tf.reshape(outputs, [-1, hidden_size])
+    output = tf.layers.dense(output, pm.num_tags)
+    output = tf.contrib.layers.dropout(output, pm.keep_prob)
+    logits = tf.reshape(output, [-1, pm.seq_length, pm.num_tags])
+    log_likelihood, transition_params = crf_log_likelihood(inputs=logits, tag_indices=input_y,
+                                                           sequence_lengths=real_sequlength)
+```
+loss损失函数:
+```
+with tf.variable_scope('loss'):
+    loss = tf.reduce_mean(-log_likelihood) #最大似然取负，使用梯度下降
+```
+optimizer优化器:
+```
+with tf.variable_scope('optimizer'):
+    num_train_steps = int((length_text) / pm.batch_size * pm.num_epochs)
+    num_warmup_steps = int(num_train_steps * 0.1)  # 总的迭代次数 * 0.1 ,这里的0.1 是官方给出的，我直接写过来了
+    train_op = optimization.create_optimizer(loss, pm.lr, num_train_steps, num_warmup_steps, False)
+ 官方提供的 optimization 主要是学习速率可以动态调整，如下面简图，学习速率由小到大，峰值就是设置的lr,然后在慢慢变小，
+ 整个学习速率，呈现三角形
+
+                 -
+               -      -
+             -          -
+           -                 -
+```
+获取预训练bert模型中所有的训练参数：
+```
+# 获取模型中所有的训练参数。
+tvars = tf.trainable_variables()
+# 加载BERT模型
+(assignment_map, initialized_variable_names) = modeling.get_assignment_map_from_checkpoint(tvars, pm.init_checkpoint)
+
+tf.train.init_from_checkpoint(pm.init_checkpoint, assignment_map)
+
+tf.logging.info("**** Trainable Variables ****")
+# 打印加载模型的参数
+for var in tvars:
+    init_string = ""
+    if var.name in initialized_variable_names:
+        init_string = ", *INIT_FROM_CKPT*"
+    tf.logging.info("  name = %s, shape = %s%s", var.name, var.shape,
+                    init_string)
+session = tf.Session()
+session.run(tf.global_variables_initializer())
+```
